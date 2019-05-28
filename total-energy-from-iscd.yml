@@ -99,6 +99,7 @@ spec:
       args:
       - create 
       - "{{workflow.name}}"
+      - "{{workflow.namespace}}"
     
   # Submit a vasp calculation to iridis
   - name: submit-vasp-to-iridis5
