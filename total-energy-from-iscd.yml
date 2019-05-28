@@ -1,0 +1,129 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: total-energy-from-icsd-
+spec:
+  entrypoint: total-energy
+  arguments:
+    parameters:
+    - name: icsdid # The collection id of the ICSD structure
+      value: 71235
+    - name: functional
+      value: pbe
+  
+  volumes:
+    - name: iridis5-login
+      secret:
+        secretName: iridis5-login
+        defaultMode: 256
+  
+  templates:
+  # The main workflow 
+  # -----------------
+  - name: total-energy
+    steps:
+    - - name: get-structure
+        template: get-structure
+        arguments:
+          parameters:
+          - name: icsdid # The collection id of the ICSD structure
+            value: "{{workflow.parameters.icsdid}}"
+    - - name: create-vasp-input
+        template: create-vasp-relax-from-cif
+        arguments:
+          artifacts:
+          - name: structure-cif
+            from: "{{steps.get-structure.outputs.artifacts.structure-cif}}"
+      - name: create-hpc-lock
+        template: create-hpc-lock
+    - - name: submit-to-iridis5
+        template: submit-vasp-to-iridis5
+        arguments:
+          artifacts:
+          - name: vasp-files
+            from: "{{steps.create-vasp-input.outputs.artifacts.vasp-files}}"
+          parameters:
+          - name: lockid
+            value: "{{steps.create-hpc-lock.outputs.parameters.lockid}}"
+    - - name: wait-for-hpc-result
+        template: wait-for-hpc-result
+
+  - name: wait-for-hpc-result
+    suspend: {}
+  
+  # workflow step templates
+  # -----------------------
+
+  # Obtain the structure information from icsd
+  - name: get-structure
+    inputs:
+      parameters:
+      - name: icsdid # The collection id of the ICSD structure
+    outputs:
+      artifacts:
+      - name: structure-cif
+        path: /data/structure.cif
+    container:
+      image: registry.kramergroup.science/workflows/get-cif-from-icsd
+      args: [ "{{inputs.parameters.icsdid}}" ]
+    
+  # Create VASP calculation from cif structure
+  - name: create-vasp-relax-from-cif
+    inputs:
+      artifacts:
+      - name: structure-cif
+        path: /data/structure.cif
+      parameters:
+      - name: functional
+        value: "pbe"
+    outputs:
+      artifacts:
+      - name: vasp-files
+        path: /data/vasp
+    container:
+      image: registry.kramergroup.science/workflows/create-vas-relax-from-cif
+
+  # Create a new lock 
+  # The lock id is accessible through {{steps.create-hpc-lock.outputs.result}}
+  - name: create-hpc-lock
+    outputs:
+        parameters:
+        - name: lockid
+          valueFrom: 
+            path: /result
+    container:
+      image: registry.kramergroup.science/workflows/lock-manager
+      env:
+      - name: API_ENDPOINT
+        value: https://b8mxx1nake.execute-api.eu-west-2.amazonaws.com/prod/lock
+      args:
+      - create 
+      - "{{workflow.name}}"
+    
+  # Submit a vasp calculation to iridis
+  - name: submit-vasp-to-iridis5
+    inputs:
+      artifacts:
+      - name: vasp-files
+        path: /data/vasp
+      parameters:
+      - name: lockid
+      - name: workflow
+        value: "{{workflow.name}}"
+    container:
+      image: registry.kramergroup.science/workflows/submit-vasp-to-iridis5
+      env:
+      - name: JOB_NAME
+        value: "{{inputs.parameters.workflow}}-{{inputs.parameters.lockid}}"
+      - name: JOB_EMAIL
+        value: "{{inputs.parameters.lockid}}@locks.kramergroup.science"
+      - name: BASEDIR
+        value: "workflows"
+      - name: USERNAME
+        valueFrom:
+          secretKeyRef:
+            name: iridis5-login
+            key: username
+      volumeMounts:
+      - name: iridis5-login
+        mountPath: "/ssh"
