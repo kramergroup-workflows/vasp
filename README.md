@@ -24,3 +24,4 @@ The following inputs are valid:
 
 > The CIF file code is unfortnuately not the same as the collection code of the ICSD database. The easiest
 > way to obtian the CIF code is to download the cif file and check the download URL (can be done in Firefox)
+  
